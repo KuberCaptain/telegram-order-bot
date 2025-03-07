@@ -3,7 +3,7 @@ from openpyxl import load_workbook
 from datetime import datetime
 
 # Телеграм-токен бота
-TOKEN = "7925085246:AAFmHuGkoopznWShwkw-Eh745_ue6OdGTeY"
+TOKEN = "token telegram"
 bot = telebot.TeleBot(TOKEN)
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)  # Путь к .exe или бинарнику
