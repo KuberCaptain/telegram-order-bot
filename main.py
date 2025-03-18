@@ -1,19 +1,33 @@
 import telebot
 from openpyxl import load_workbook
 from datetime import datetime
+import os
+import sys
 
-# Телеграм-токен бота
+# Телеграм-токен бота и ID администратора
 TOKEN = "7925085246:AAFmHuGkoopznWShwkw-Eh745_ue6OdGTeY"
+ADMIN_ID = 2133609169
 bot = telebot.TeleBot(TOKEN)
+
+# Определяем базовую директорию
 if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)  # Путь к .exe или бинарнику
+    BASE_DIR = os.path.dirname(sys.executable)
 else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Путь к .py файлу
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Названия файлов
 BLACKLIST_FILE = os.path.join(BASE_DIR, "blacklist.xlsx")
 PRODUCTS_FILE = os.path.join(BASE_DIR, "products.xlsx")
 ORDERS_FILE = os.path.join(BASE_DIR, "orders.xlsx")
-# 📌 /start и /help — список команд
+
+# Уведомление админа
+def notify_admin(order_details):
+    try:
+        bot.send_message(ADMIN_ID, f"🔔 Новый заказ!\n{order_details}")
+    except Exception as e:
+        print(f"Ошибка отправки уведомления админу: {e}")
+
+# /start и /help — список команд
 @bot.message_handler(commands=['start', 'help'])
 def send_help(message):
     help_text = (
@@ -22,9 +36,15 @@ def send_help(message):
         "/Order - оформить заказ\n"
         "/blacklist - показать черный список персонажей"
     )
-    bot.reply_to(message, help_text)
+    if message.from_user.id == ADMIN_ID:
+        help_text += (
+            "\n\n*Команды администратора:*\n"
+            "/Orders - посмотреть все заказы\n"
+            "/AddToBlacklist - добавить в черный список"
+        )
+    bot.reply_to(message, help_text, parse_mode="Markdown")
 
-# 📌 /Magaz — показать ассортимент
+# /Magaz — показать ассортимент
 @bot.message_handler(commands=['Magaz'])
 def send_products(message):
     wb = load_workbook(PRODUCTS_FILE)
@@ -48,10 +68,10 @@ def send_products(message):
             lines.append(f" - {name}: {price} (в наличии: {qty})")
         lines.append("")
 
-    text = "\n".join(lines)
+    text = "\n".join(lines)  # Исправлено здесь
     bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
-# 📌 /ЧС — показать черный список
+# /blacklist — показать черный список
 @bot.message_handler(commands=['ЧС', 'blacklist', 'banlist'])
 def send_blacklist(message):
     try:
@@ -60,11 +80,10 @@ def send_blacklist(message):
         lines = ["*Черный список персонажей:*"]
         
         for row in ws.iter_rows(min_row=2, values_only=True):
-            print(f"DEBUG: {row}")  # Отладка в терминале
+            print(f"DEBUG: {row}")
             if len(row) < 2 or any(cell is None for cell in row[:2]):
-                continue  # Пропускаем пустые строки и лишние колонки
-
-            name, reason = row[:2]  # Берем только два столбца
+                continue
+            name, reason = row[:2]
             lines.append(f" - {name} ({reason})")
 
         if len(lines) == 1:
@@ -75,10 +94,9 @@ def send_blacklist(message):
         bot.send_message(message.chat.id, text, parse_mode="Markdown")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Ошибка чтения черного списка: {e}")
-        print(f"Ошибка: {e}")  # Отладочный вывод в консоль
+        print(f"Ошибка: {e}")
 
-
-# 📌 /Order — оформить заказ
+# /Order — оформить заказ
 @bot.message_handler(commands=['Order'])
 def order_start(message):
     msg = bot.reply_to(message, "Введите название товара для заказа:")
@@ -97,8 +115,7 @@ def process_order_product(message, user_id):
             break
 
     if product_name_found is None:
-        msg = bot.reply_to(message, "Товар не найден. Введите корректное название:")
-        bot.register_next_step_handler(msg, process_order_product, user_id)
+        bot.reply_to(message, "❌ Товар не найден. Заказ отменен. Используйте /Order для новой попытки.")
         return
 
     msg = bot.reply_to(message, f'Введите количество для товара "{product_name_found}":')
@@ -152,19 +169,82 @@ def process_order_quantity(message, product_name, user_id):
     ws_orders.append([now, username, name_cell.value, quantity])
     wb_orders.save(ORDERS_FILE)
 
-    bot.send_message(user_id, f"✅ Ваш заказ оформлен: {name_cell.value} x {quantity}. Спасибо!")
+    order_details = (f"👤 Покупатель: {username}\n"
+                    f"📦 Товар: {name_cell.value}\n"
+                    f"📊 Количество: {quantity}\n"
+                    f"🕒 Время: {now}")
 
-    # 🔴 ОТПРАВКА СООБЩЕНИЯ АДМИНУ (тот, кто заказал)
-    try:
-        bot.send_message(user_id, f"📢 Ваш заказ оформлен!\n"
-                                  f"👤 Вы: {username}\n"
-                                  f"📦 Товар: {name_cell.value}\n"
-                                  f"📊 Количество: {quantity}\n"
-                                  f"🕒 Время: {now}")
-    except Exception as e:
-        print(f"Ошибка отправки админу: {e}")
+    bot.send_message(user_id, f"✅ Ваш заказ оформлен: {name_cell.value} x {quantity}. Спасибо!")
+    notify_admin(order_details)
 
     bot.reply_to(message, "Заказ принят! Ожидайте подтверждения.")
 
-# 📌 Запуск бота
+# /Orders — показать все заказы (только для админа)
+@bot.message_handler(commands=['Orders'])
+def show_orders(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+
+    try:
+        wb = load_workbook(ORDERS_FILE)
+        ws = wb.active
+        lines = ["*Список заказов:*"]
+        
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if len(row) < 4 or any(cell is None for cell in row):
+                continue
+            date, username, product, qty = row
+            date = str(date).replace('_', r'\_')
+            username = str(username).replace('_', r'\_')
+            product = str(product).replace('_', r'\_')
+            qty = str(qty).replace('_', r'\_')
+            line = f"🕒 {date} | 👤 {username} | 📦 {product} x{qty}"
+            if len("\n".join(lines + [line])) < 4000:
+                lines.append(line)
+            else:
+                break
+
+        if len(lines) == 1:
+            text = "🔹 Список заказов пуст."
+        else:
+            text = "\n".join(lines)
+
+        try:
+            bot.send_message(message.chat.id, text, parse_mode="Markdown")
+        except telebot.apihelper.ApiTelegramException as e:
+            bot.send_message(message.chat.id, text, parse_mode=None)
+            print(f"Ошибка Markdown: {e}")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при чтении заказов: {e}")
+
+# /AddToBlacklist — добавить в черный список (только для админа)
+@bot.message_handler(commands=['AddToBlacklist', 'ДобавитьВЧС'])
+def add_to_blacklist_start(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ Доступ запрещен. Эта команда только для администратора.")
+        return
+    
+    msg = bot.reply_to(message, "Введите имя для добавления в черный список:")
+    bot.register_next_step_handler(msg, process_blacklist_name)
+
+def process_blacklist_name(message):
+    name = message.text.strip()
+    msg = bot.reply_to(message, f"Введите причину для '{name}' в черном списке:")
+    bot.register_next_step_handler(msg, process_blacklist_reason, name)
+
+def process_blacklist_reason(message, name):
+    reason = message.text.strip()
+    
+    try:
+        wb = load_workbook(BLACKLIST_FILE)
+        ws = wb.active
+        ws.append([name, reason])
+        wb.save(BLACKLIST_FILE)
+        bot.reply_to(message, f"✅ '{name}' добавлен в черный список с причиной: {reason}")
+        notify_admin(f"🔔 Добавлен в ЧС:\n👤 {name}\n📝 Причина: {reason}")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при добавлении в черный список: {e}")
+
+# Запуск бота
 bot.infinity_polling()
